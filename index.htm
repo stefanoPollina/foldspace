@@ -942,7 +942,12 @@ function setPlayState(value){
  // Preserve the user's previous global octave and restore it on exit.
  if(nextSpecial&&!specialOctaveMode){
   savedInstrumentOctave=octave;
-  $('#octave').value='2';
+ }
+ // Hexagonal handpan starts in octave 1; dodecagon starts in octave 2.
+ // Switching between them resets to that instrument's own opening register.
+ const switchedSpecial=nextSpecial&&(!specialOctaveMode||(value==='handpanHex'&&!hexHandpanView)||(value==='immersive'&&!dodecagonView));
+ if(switchedSpecial){
+  $('#octave').value=value==='handpanHex'?'1':'2';
   changeScale();
  }else if(!nextSpecial&&specialOctaveMode&&savedInstrumentOctave!==null){
   $('#octave').value=String(savedInstrumentOctave);
