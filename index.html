@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Indras Net · Hexagonal Manifold + Full-Circle Harmonic Table</title>
+<style>html,body{margin:0;min-height:100%;background:#12231e;color:#d7ebd4;font-family:system-ui,sans-serif}main{max-width:730px;margin:12vh auto;padding:28px}h1{font-weight:500;letter-spacing:.03em}p{line-height:1.6}#status{white-space:pre-wrap;color:#c2d6b8;padding:18px;background:#1b312a;border:1px solid #446552;border-radius:10px}</style></head>
+<body><main><h1>Indras Net · Hexagonal Manifold + Full-Circle Harmonic Table</h1><p>Two independent play states: <b>Immersive · Hexagonal Manifold</b> retains the concentric 37-pad octave instrument. <b>Harmonic Table · Tonnetz</b> adds a full-circle, edge-to-edge isomorphic hex grid (every pad lit), with vertical fifths (+7), up-right major thirds (+4), up-left minor thirds (+3), absolute MIDI pitches and scale-based colours. Traditional Tonnetz stays static; Sound Reactive has distinct spectrum-driven rings. <b>Saved sounds</b> lets players save, reload, export and import their own sound configurations. This local prototype does not modify GitHub.</p><div id="status">Loading original instrument...</div></main>
+<script type="text/plain" id="savedSoundsAddon">
+'use strict';
+// Saved sounds: capture and restore a player's own sound configuration.
+// Stored in this browser (localStorage) and exportable / importable as .json files.
+(()=>{
+ const STORE='foldspace.savedSounds.v1',LAST='foldspace.lastSession.v1',VERSION=1;
+ const q=s=>document.querySelector(s);
+ let memory=[],lastMemory=null,storageOk=true;
+ try{const t='__fs_test';localStorage.setItem(t,'1');localStorage.removeItem(t)}catch(_){storageOk=false}
+ const readList=()=>{if(!storageOk)return memory;try{const v=JSON.parse(localStorage.getItem(STORE)||'[]');return Array.isArray(v)?v:[]}catch(_){return []}};
+ const writeList=list=>{memory=list;if(!storageOk)return;try{localStorage.setItem(STORE,JSON.stringify(list))}catch(e){flash('Could not save in this browser: '+e.message+'. Use Export to keep a file.')}};
+ const readLast=()=>{if(!storageOk)return lastMemory;try{return JSON.parse(localStorage.getItem(LAST)||'null')}catch(_){return null}};
+ const writeLast=s=>{lastMemory=s;if(!storageOk)return;try{localStorage.setItem(LAST,JSON.stringify(s))}catch(_){}};
+ const val=sel=>q(sel)?q(sel).value:undefined;
+ const fire=(sel,type)=>{const el=q(sel);if(el)el.dispatchEvent(new Event(type,{bubbles:true}))};
+
+ function capture(name){
+  const presetIndex=val('#preset');
+  return{
+   app:'foldspace',version:VERSION,name:name||'Untitled sound',saved:new Date().toISOString(),
+   basedOn:presetIndex!==''&&patchBank[+presetIndex]?patchBank[+presetIndex].name:'Mutated / custom',
+   preset:presetIndex,
+   params:{...params},
+   routes:routes.map(r=>({from:r.from,to:r.to,amount:r.amount})),
+   modulation:{automatic,depth,rate},
+   scale:{root:val('#root'),octave:val('#octave'),type:val('#scaleType')},
+   geometry:val('#geometry'),playState:val('#playState'),touchMode:val('#touchMode'),
+   sequencer:{pattern:[...pattern],bpm:val('#bpm')},
+   volume:val('#volume')
+  };
+ }
+
+ function setSelect(sel,value){const el=q(sel);if(!el||value===undefined||value===null)return false;if(![...el.options].some(o=>o.value===String(value)))return false;el.value=String(value);return true}
+
+ function restore(s){
+  if(!s||s.app!=='foldspace')throw Error('This is not a Foldspace sound file.');
+  // 1. Start from the patch it was based on, so description and defaults line up.
+  if(s.preset!==undefined&&s.preset!==''&&patchBank[+s.preset])applyPatch(+s.preset);
+  connectionSnapshot=null;
+  // 2. Scale before play state (the hexagonal manifold sets its own register on entry).
+  if(s.scale){setSelect('#root',s.scale.root);setSelect('#scaleType',s.scale.type);setSelect('#octave',s.scale.octave);changeScale()}
+  if(setSelect('#geometry',s.geometry))fire('#geometry','change');
+  if(setSelect('#playState',s.playState))fire('#playState','change');
+  if(setSelect('#touchMode',s.touchMode))fire('#touchMode','change');
+  // 3. Sound engine values.
+  if(s.params)for(const [key,value] of Object.entries(s.params))if(key in params&&Number.isFinite(+value)){setParam(key,+value);if(key in effective&&extraNodeKeys.includes(key))effective[key]=+value}
+  // 4. Living connections.
+  if(Array.isArray(s.routes)){
+   routes=s.routes.filter(r=>parameterKeys.includes(r.from)&&parameterKeys.includes(r.to)&&r.from!==r.to&&Number.isFinite(+r.amount)).map(r=>({from:r.from,to:r.to,amount:Math.max(-1,Math.min(1,+r.amount))}));
+  }
+  if(s.modulation){
+   automatic=!!s.modulation.automatic;depth=Math.max(0,Math.min(1,+s.modulation.depth||0));rate=Math.max(0,+s.modulation.rate||0);
+   if(q('#motion')){q('#motion').value=Math.round(depth*100);q('#motionValue').textContent=Math.round(depth*100)+'%'}
+   if(q('#rate')){q('#rate').value=Math.round(rate*100);q('#rateValue').textContent=rate.toFixed(2)+' Hz'}
+   q('#auto').setAttribute('aria-pressed',automatic);q('#auto').textContent=(automatic?'●':'○')+' Auto modulation';
+  }
+  routeUI();refreshRouting(performance.now(),.016);
+  // 5. Sequencer, tempo and output.
+  if(s.sequencer){
+   if(Array.isArray(s.sequencer.pattern)&&s.sequencer.pattern.length){pattern=s.sequencer.pattern.slice(0,16).map(n=>Number.isInteger(n)&&n>=0?n%notes.length:-1);while(pattern.length<16)pattern.push(-1);drawSteps()}
+   if(s.sequencer.bpm&&q('#bpm')){q('#bpm').value=Math.max(40,Math.min(180,+s.sequencer.bpm||84))}
+  }
+  if(s.volume!==undefined&&q('#volume')){q('#volume').value=s.volume;fire('#volume','input')}
+  updateFX();
+  q('#patchDescription').textContent='Saved sound · '+s.name+(s.basedOn?' · based on '+s.basedOn:'');
+ }
+
+ // ---------- interface ----------
+ const style=document.createElement('style');
+ style.textContent=`
+#savedSoundsDialog{max-width:560px;width:calc(100% - 32px)}
+#savedSoundsDialog h2{margin:6px 0 4px;font-family:'Space Grotesk',sans-serif;font-weight:500}
+#savedSoundsDialog .ss-sub{font-size:12px;color:#5d6e64;margin:0 0 18px;line-height:1.6}
+#savedSoundsDialog .ss-save{display:flex;gap:8px;margin-bottom:18px}
+#savedSoundsDialog input[type=text]{flex:1;padding:10px 12px;border:1px solid #c4cbbd;border-radius:6px;background:#fff;color:var(--ink);font-size:13px}
+#savedSoundsDialog .ss-primary{background:var(--panel);color:#edf0df;border:0;border-radius:6px;padding:10px 16px;font-size:12px;font-weight:600}
+#savedSoundsDialog .ss-list{list-style:none;margin:0;padding:0;max-height:46vh;overflow:auto;border-top:1px solid #d6dccf}
+#savedSoundsDialog .ss-list li{display:flex;align-items:center;gap:8px;padding:11px 2px;border-bottom:1px solid #d6dccf}
+#savedSoundsDialog .ss-meta{flex:1;min-width:0}
+#savedSoundsDialog .ss-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#savedSoundsDialog .ss-date{font-size:11px;color:#6d7c72}
+#savedSoundsDialog .ss-list button{border:1px solid #c4cbbd;background:none;border-radius:5px;padding:6px 9px;font-size:11px;color:var(--ink)}
+#savedSoundsDialog .ss-list button.ss-load{background:var(--lime);border-color:var(--lime);color:#22332b;font-weight:600}
+#savedSoundsDialog .ss-list li.ss-last{background:#e4ead9}
+#savedSoundsDialog .ss-empty{font-size:12px;color:#6d7c72;padding:14px 2px}
+#savedSoundsDialog .ss-foot{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px;align-items:center}
+#savedSoundsDialog .ss-foot button{border:1px solid #c4cbbd;background:none;border-radius:5px;padding:8px 11px;font-size:11px;color:var(--ink)}
+#savedSoundsDialog .ss-status{font-size:11px;color:#4d6b3a;min-height:16px;margin-top:10px}
+`;
+ document.head.append(style);
+
+ const dialog=document.createElement('dialog');dialog.id='savedSoundsDialog';
+ dialog.innerHTML=`<button class="quiet" id="ssClose" type="button">Close ×</button>
+<h2>Saved sounds</h2>
+<p class="ss-sub">Save your own configuration: every engine control, all living connections, auto modulation, scale, geometry, play state, sequencer pattern and tempo.${storageOk?' Sounds are kept in this browser; export a file to keep a copy or share it.':' <b>This browser is blocking storage, so sounds last only for this visit. Use Export to keep them.</b>'}</p>
+<form class="ss-save" id="ssForm"><input type="text" id="ssName" maxlength="60" placeholder="Name this sound" aria-label="Sound name"><button class="ss-primary" type="submit">Save current sound</button></form>
+<ul class="ss-list" id="ssList"></ul>
+<div class="ss-foot"><button type="button" id="ssExport">Export all (.json)</button><button type="button" id="ssImport">Import .json</button><input type="file" id="ssFile" accept=".json,application/json" hidden></div>
+<div class="ss-status" id="ssStatus" role="status"></div>`;
+ document.body.append(dialog);
+
+ function flash(text){const el=q('#ssStatus');if(el)el.textContent=text}
+ const fmt=iso=>{try{return new Date(iso).toLocaleString([], {dateStyle:'medium',timeStyle:'short'})}catch(_){return ''}};
+ const esc=t=>String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+ function render(){
+  const list=readList(),ul=q('#ssList');ul.innerHTML='';
+  const last=readLast();
+  if(last){const li=document.createElement('li');li.className='ss-last';li.innerHTML=`<div class="ss-meta"><div class="ss-name">Last session</div><div class="ss-date">Auto-kept when you left · ${esc(fmt(last.saved))}</div></div><button class="ss-load" type="button">Load</button>`;li.querySelector('.ss-load').onclick=()=>load(last,'last session');ul.append(li)}
+  if(!list.length){const li=document.createElement('li');li.className='ss-empty';li.textContent='No saved sounds yet. Shape a sound, name it above and save.';ul.append(li);return}
+  list.forEach((s,i)=>{
+   const li=document.createElement('li');
+   li.innerHTML=`<div class="ss-meta"><div class="ss-name">${esc(s.name)}</div><div class="ss-date">${esc(fmt(s.saved))}${s.basedOn?' · from '+esc(s.basedOn):''}</div></div><button class="ss-load" type="button">Load</button><button type="button" data-a="update" title="Replace with the current sound">Update</button><button type="button" data-a="rename">Rename</button><button type="button" data-a="export" title="Download this sound">↓</button><button type="button" data-a="delete" aria-label="Delete ${esc(s.name)}">×</button>`;
+   li.querySelector('.ss-load').onclick=()=>load(s,s.name);
+   li.querySelectorAll('[data-a]').forEach(b=>b.onclick=()=>{
+    const all=readList(),a=b.dataset.a;
+    if(a==='update'){all[i]={...capture(s.name)};writeList(all);flash('Updated “'+s.name+'” with the current sound.')}
+    if(a==='rename'){const n=prompt('Rename sound',s.name);if(n&&n.trim()){all[i].name=n.trim().slice(0,60);writeList(all);flash('Renamed.')}}
+    if(a==='delete'){if(confirm('Delete “'+s.name+'”?')){all.splice(i,1);writeList(all);flash('Deleted “'+s.name+'”.')}}
+    if(a==='export')download([s],s.name);
+    render();
+   });
+   ul.append(li);
+  });
+ }
+
+ function load(s,label){try{restore(s);flash('Loaded '+label+'.');setTimeout(()=>dialog.close(),350)}catch(e){flash('Could not load: '+e.message)}}
+
+ function download(list,label){
+  const blob=new Blob([JSON.stringify({app:'foldspace',version:VERSION,sounds:list},null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download=(label||'foldspace-sounds').replace(/[^\w\- ]+/g,'').trim().replace(/\s+/g,'-').toLowerCase()+'.foldspace.json';
+  document.body.append(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500);
+  flash('Exported '+list.length+' sound'+(list.length===1?'':'s')+'.');
+ }
+
+ q('#ssForm').onsubmit=e=>{e.preventDefault();const input=q('#ssName');const name=input.value.trim()||('My sound '+(readList().length+1));
+  const list=readList();const existing=list.findIndex(s=>s.name.toLowerCase()===name.toLowerCase());
+  if(existing>=0&&!confirm('A sound called “'+name+'” exists. Replace it?'))return;
+  const snap=capture(name);if(existing>=0)list[existing]=snap;else list.unshift(snap);writeList(list);input.value='';render();flash('Saved “'+name+'”.')};
+ q('#ssClose').onclick=()=>dialog.close();
+ q('#ssExport').onclick=()=>{const list=readList();if(!list.length){flash('Nothing to export yet.');return}download(list,'foldspace-sounds')};
+ q('#ssImport').onclick=()=>q('#ssFile').click();
+ q('#ssFile').onchange=async e=>{const file=e.target.files[0];e.target.value='';if(!file)return;
+  try{const data=JSON.parse(await file.text());const incoming=(Array.isArray(data.sounds)?data.sounds:[data]).filter(s=>s&&s.app==='foldspace'&&s.params);
+   if(!incoming.length)throw Error('no Foldspace sounds found in that file');
+   const list=readList();for(const s of incoming){let name=s.name||'Imported sound',n=2;while(list.some(x=>x.name===name))name=(s.name||'Imported sound')+' ('+n++ +')';list.push({...s,name})}
+   writeList(list);render();flash('Imported '+incoming.length+' sound'+(incoming.length===1?'':'s')+'.')}catch(err){flash('Import failed: '+err.message)}};
+
+ const button=q('#savedSounds');
+ if(button)button.onclick=()=>{q('#ssName').placeholder='Name this sound (e.g. '+((patchBank[+val('#preset')]||{}).name||'My sound')+' variation)';render();flash('');dialog.showModal();setTimeout(()=>q('#ssName').focus(),30)};
+
+ // Instrument-page shortcut: All connections on/off (same toggle as on Living connections).
+ const quick=q('#allConnectionsQuick');
+ if(quick){quick.onclick=()=>enableAllConnections();syncConnectionState()}
+
+ // Keep the last session so nothing is lost on reload.
+ const keepLast=()=>{try{writeLast(capture('Last session'))}catch(_){}};
+ window.addEventListener('pagehide',keepLast);
+ document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')keepLast()});
+
+ window.FoldspaceSavedSounds={capture,restore,list:readList};
+})();
+</script>
+<script>
+(async()=>{
+ const status=document.getElementById('status');
+ const sourceUrl="https://raw.githubusercontent.com/stefanoPollina/foldspace/d5f9268d66f14575283fb12ee3b6a4ac77821391/index.htm";
+ const patches=[["Immersive · folded light</option>","Immersive · Hexagonal Manifold</option><option value=\"harmonicTable\">Harmonic Table · Tonnetz</option>"],["let originalView=false,exactZoom=2,exactPlay=false,audioReactive=false,immersiveView=false,handpanView=false,savedExploration=null,savedHandpan=null,spectrum=null,audioLevel=0;","let originalView=false,exactZoom=2,exactPlay=false,audioReactive=false,immersiveView=false,handpanView=false,hexFoldedView=false,harmonicTableView=false,savedFoldedOctave=null,savedFoldedTouch=null,savedExploration=null,savedHandpan=null,spectrum=null,audioLevel=0;"],["const nextExact=value==='exact'||value==='both',nextHandpan=value==='handpan';","const nextExact=value==='exact'||value==='both',nextHandpan=value==='handpan'||value==='immersive'||value==='harmonicTable';"],["exactPlay=nextExact;immersiveView=value==='immersive';handpanView=nextHandpan;","exactPlay=nextExact;immersiveView=false;handpanView=nextHandpan;hexFoldedView=value==='immersive';harmonicTableView=value==='harmonicTable';"],["$('#geometry').disabled=exactPlay;","$('#geometry').disabled=exactPlay||hexFoldedView||harmonicTableView;"],["handpanLayout=HandpanModel.build(scaleSteps(),tonic,octave,geometry);","handpanLayout=harmonicTableView?HarmonicTableModel.build(tonic,octave,scaleSteps()):hexFoldedView?FoldedHexModel.build(scaleSteps(),tonic,octave):HandpanModel.build(scaleSteps(),tonic,octave,geometry);"],["const key=[geometry,scaleType,tonic,octave].join(':');","const key=[geometry,scaleType,tonic,octave,harmonicTableView?'harmonic':hexFoldedView?'hexfold':'ordinary'].join(':');"],["handpanView?handpan[option.value]:immersiveView?original[option.value]:geometryOptionTitles.get(option.value)","harmonicTableView?'Harmonic Table · vertical fifths':hexFoldedView?'Hexagonal manifold · fixed lattice':handpanView?handpan[option.value]:immersiveView?original[option.value]:geometryOptionTitles.get(option.value)"],["const a=i*Math.PI*2/item.cell.sides-Math.PI/2;","const a=i*Math.PI*2/item.cell.sides-Math.PI/2+(item.cell.rotation||0);"],["window.history.pushState(null,'','#'+a.dataset.page);","try{window.history.pushState(null,'',location.href.split('#')[0]+'#'+a.dataset.page)}catch(_){}"],["<button id=\"random\" class=\"quiet\">⤨ Mutate</button>","<button id=\"allConnectionsQuick\" class=\"quiet\" type=\"button\" aria-pressed=\"false\" title=\"Turn on all 132 connection paths and light every line. Tap again to restore.\">○ All connections</button><button id=\"savedSounds\" class=\"quiet\" type=\"button\" aria-haspopup=\"dialog\">✦ Saved sounds</button><button id=\"random\" class=\"quiet\">⤨ Mutate</button>"],["let delta=b.angle-a.angle;if(delta>Math.PI)delta-=Math.PI*2;if(delta<-Math.PI)delta+=Math.PI*2;const index=parameterKeys.indexOf(route.from)*12+parameterKeys.indexOf(route.to),innerX=scale*1.015+(ringX-scale*1.015)*(index%7)/7,innerY=scale*1.015+(ringY-scale*1.015)*(index%7)/7,points=[];for(let j=0;j<=24;j++){const t=j/24,angle=a.angle+delta*t,blend=Math.pow(Math.abs(t-.5)*2,3);points.push({x:cx+Math.cos(angle)*(innerX+(ringX-innerX)*blend),y:cy+Math.sin(angle)*(innerY+(ringY-innerY)*blend)})}pathPoints(points);g.strokeStyle=colors[route.from]+(bypassed?'15':'45');g.lineWidth=.5+Math.abs(route.amount);g.stroke();if(!bypassed&&automatic){const t=(ms*.0001*rate*4+index*.13)%1,p=points[Math.floor(t*24)];g.fillStyle=colors[route.from];g.beginPath();g.arc(p.x,p.y,1.6,0,Math.PI*2);g.fill()}}","const index=parameterKeys.indexOf(route.from)*12+parameterKeys.indexOf(route.to),bend={x:cx+(a.x+b.x-2*cx)*.34+(b.y-a.y)*.13,y:cy+(a.y+b.y-2*cy)*.34-(b.x-a.x)*.13};g.beginPath();g.moveTo(a.x,a.y);g.quadraticCurveTo(bend.x,bend.y,b.x,b.y);g.strokeStyle=colors[route.from]+(bypassed?'10':lit?'c0':Math.abs(route.amount)>.15?'78':'34');g.lineWidth=(lit?.9:.5)+Math.abs(route.amount)*1.6;g.setLineDash(route.amount<0?[3,4]:[]);g.stroke();g.setLineDash([]);if(!bypassed&&(automatic||lit)){const t=(ms*.0001*(automatic?rate:.25)*4+index*.13)%1,x=(1-t)**2*a.x+2*(1-t)*t*bend.x+t*t*b.x,y=(1-t)**2*a.y+2*(1-t)*t*bend.y+t*t*b.y;g.fillStyle=colors[route.from];g.beginPath();g.arc(x,y,1.6,0,Math.PI*2);g.fill()}}"],["function syncConnectionState(){","function allConnectionsActive(){return routes.filter(isRouteActive).length===parameterKeys.length*(parameterKeys.length-1)}\nfunction syncConnectionState(){"],[" $('#allConnections').setAttribute('aria-pressed',active===total);"," $('#allConnections').setAttribute('aria-pressed',active===total);\n $('#allConnections').textContent=active===total?(connectionSnapshot?'● All connections on · tap to restore':'● All connections on'):'All connections on';\n const quick=document.getElementById('allConnectionsQuick');if(quick){quick.setAttribute('aria-pressed',active===total);quick.textContent=(active===total?'● ':'○ ')+'All connections';quick.style.color=active===total?'#d5ed8a':''}"],[" if(routes.filter(isRouteActive).length===total){syncConnectionState();return}"," if(routes.filter(isRouteActive).length===total){if(connectionSnapshot){restoreConnections();return}syncConnectionState();return}"],["function drawHarmonicEdges(neighbours){","function drawHarmonicEdges(neighbours){const lit=allConnectionsActive();"],["g.strokeStyle=selectedEdgeIds.has(edge.id)?cellPaint(selected,true).stroke:'#9bbc7260';g.lineWidth=selectedEdgeIds.has(edge.id)?2:.7;","g.strokeStyle=selectedEdgeIds.has(edge.id)?cellPaint(selected,true).stroke:lit?'#d9efa6d0':'#9bbc7260';g.lineWidth=selectedEdgeIds.has(edge.id)?2:lit?1.3:.7;"],["function drawModulation(ms){","function drawModulation(ms){const lit=allConnectionsActive();"],["g.strokeStyle=colors[r.from]+(bypassed?'18':Math.abs(r.amount)>.15?'80':'30');","g.strokeStyle=colors[r.from]+(bypassed?'18':allConnectionsActive()?'c0':Math.abs(r.amount)>.15?'80':'30');"],["function setPlayState(value){originalView=value==='original';","function setPlayState(value){\n const enteringFold=value==='immersive'&&!hexFoldedView;\n const leavingFold=value!=='immersive'&&hexFoldedView;\n if(enteringFold){savedFoldedOctave=octave;$('#octave').value='1';changeScale();savedFoldedTouch=touchMode;touchMode='single';$('#touchMode').value='single';}\n if(leavingFold){if(savedFoldedOctave!==null){$('#octave').value=String(savedFoldedOctave);changeScale();savedFoldedOctave=null;}if(savedFoldedTouch!==null){touchMode=savedFoldedTouch;$('#touchMode').value=touchMode;savedFoldedTouch=null;}}\n originalView=value==='original';"],["function refreshHandpan(force=false){","const HarmonicTableModel=(()=>{\n // Columns are q = -3..3, rows r = -3..4. Pointy-up hex orientation is\n // NOT used here: this is a flat-top hex grid with vertical fifths.\n // On screen: up (q,r-1) = +7, up-right (q+1,r-1) = +4,\n // up-left (q-1,r) = +3. This follows from pitch = base - 3*q - 7*r.\n // Flat-top hexes that tessellate edge to edge and run out past the circular rim,\n // so the canvas clip makes the grid meet the bounding ring with no gaps.\n const R=.082,dx=1.5*R,dy=Math.sqrt(3)*R,rows=29,columns=19,reach=1+R*1.2;\n function build(tonic,octave,steps){\n  const raw=[];\n  for(let q=-9;q<=9;q++)for(let r=-14;r<=14;r++){\n   const x=dx*q,y=dy*(r+q/2);\n   if(Math.hypot(x,y)>reach)continue;\n   raw.push({q,r,x,y,offset:-3*q-7*r});\n  }\n  // Keep the chosen register where possible, but shift by whole octaves so every pad stays inside MIDI 0..127.\n  let base=12*(octave+1)+tonic;\n  const lo=Math.min(...raw.map(c=>c.offset)),hi=Math.max(...raw.map(c=>c.offset));\n  while(base+hi>127&&base+lo-12>=0)base-=12;\n  while(base+lo<0&&base+hi+12<=127)base+=12;\n  const cells=[],byCoord=new Map();\n  for(const {q,r,x,y,offset} of raw){\n   let midi=base+offset;while(midi<0)midi+=12;while(midi>127)midi-=12;\n   const pc=((midi-tonic)%12+12)%12;\n   const cell={id:'harmonic:'+q+':'+r,q,r,ring:1,degree:steps.indexOf(pc),midi,x,y,\n    radius:R*.97,sides:6,rotation:Math.PI/6,harmonicTable:true,\n    inScale:steps.includes(pc),isTonic:pc===0,isDominant:pc===7,isSubdominant:pc===5};\n   cells.push(cell);byCoord.set(q+','+r,cell);\n  }\n  const links=[];\n  for(const c of cells)for(const [dq,dr,type] of [[0,-1,'fifth'],[1,-1,'major'],[-1,0,'minor']]){\n   const other=byCoord.get((c.q+dq)+','+(c.r+dr));if(other)links.push({a:c.id,b:other.id,type});\n  }\n  cells.sort((a,b)=>Math.hypot(a.x,a.y)-Math.hypot(b.x,b.y));\n  return {cells,links,degreeCount:steps.length,harmonicTable:true,rows,columns};\n }\n return {build};\n})();\n\nconst FoldedHexModel=(()=>{\n function build(steps,tonic,register){\n  if(!steps.length)throw Error('Scale required for hexagonal manifold');\n  const coords=[];\n  for(let q=-3;q<=3;q++)for(let r=-3;r<=3;r++)if(Math.max(Math.abs(q),Math.abs(r),Math.abs(q+r))<=3)coords.push({q,r});\n  const ringOf=p=>Math.max(Math.abs(p.q),Math.abs(p.r),Math.abs(p.q+p.r));\n  const angleOf=p=>Math.atan2(Math.sqrt(3)*p.r/2,p.q+p.r/2);\n  // Physically clockwise, beginning at the uppermost hex position in every ring.\n  // Pitch order now follows a visible path rather than atan2's left-axis wrap.\n  const fromTop=p=>(angleOf(p)+Math.PI/2+Math.PI*2)%(Math.PI*2);\n  coords.sort((a,b)=>ringOf(a)-ringOf(b)||fromTop(a)-fromTop(b));\n  const counts=[1,6,12,18],positions=[0,0,0,0];\n  let base=12*(register+1)+tonic;\n  const ringStart=[0,1,7,19],lastStep=36;\n  while(base+12*Math.floor(lastStep/steps.length)+steps[lastStep%steps.length]>127)base-=12;\n  // One octave per ring, WITHOUT crossing registers.\n  // Pad notes follow the musical scale in proper order, looping at the tonic\n  // instead of scattering duplicated degrees across the ring.\n  // Handpan clock-face placement (right-handed build), applied to every ring:\n  // lowest note at 6 o'clock (nearest the player), the next at ~5 o'clock (right),\n  // the next at ~7 o'clock (left), then alternating right/left up the sides like a zipper,\n  // with the highest notes at 12 o'clock. The ding (centre) is the lowest note of all.\n  const order=new Map();\n  for(let ring=1;ring<=3;ring++){\n   const pads=coords.filter(p=>ringOf(p)===ring).map(p=>({p,x:p.q+p.r/2,y:p.r})),eps=1e-6;\n   const bottom=pads.filter(t=>Math.abs(t.x)<eps&&t.y>0),top=pads.filter(t=>Math.abs(t.x)<eps&&t.y<0);\n   const right=pads.filter(t=>t.x>eps).sort((a,b)=>b.y-a.y||a.x-b.x),left=pads.filter(t=>t.x<-eps).sort((a,b)=>b.y-a.y||b.x-a.x);\n   const seq=[...bottom];for(let i=0;i<Math.max(right.length,left.length);i++){if(right[i])seq.push(right[i]);if(left[i])seq.push(left[i])}seq.push(...top);\n   seq.forEach((t,i)=>order.set(t.p.q+','+t.p.r,i));\n  }\n  const cells=coords.map(({q,r})=>{\n    const ring=ringOf({q,r}),index=ring===0?0:order.get(q+','+r);\n    // Rises like a handpan: centre = tonic, then the scale keeps ascending (zigzag) through\n    // ring 1, ring 2 and ring 3 (36 steps), crossing octaves as it goes.\n    const step=ringStart[ring]+index,degree=step%steps.length;\n    const octaveStep=Math.floor(step/steps.length);\n    const midi=base+12*octaveStep+steps[degree];\n    return{id:ring===0?'hex:centre':'hex:'+q+':'+r,ring,octaveStep,degree,step,midi,x:.218*(q+r/2),y:.218*Math.sqrt(3)*r/2,radius:.118,sides:6,q,r,ringPosition:index};\n  });\n  const byCoord=new Map(cells.map(c=>[c.q+','+c.r,c]));\n  const links=[];\n  for(const cell of cells)for(const [dq,dr] of [[1,0],[0,1],[-1,1]]){\n    const other=byCoord.get((cell.q+dq)+','+(cell.r+dr));\n    if(other)links.push({a:cell.id,b:other.id,type:cell.octaveStep===other.octaveStep?'scale':'octave'});\n  }\n  return{cells,links,degreeCount:steps.length,foldedHex:true,ringCounts:counts};\n }\n return{build};\n})();\n\nfunction refreshHandpan(force=false){"],["for(const link of handpanLayout.links){const a=items.get(link.a),b=items.get(link.b);pathPoints([a,b]);g.strokeStyle=link.type==='octave'?'#c3d58b40':'#8ca37b30';g.lineWidth=.7;g.stroke()}","const litLinks=allConnectionsActive();for(const link of handpanLayout.links){const a=items.get(link.a),b=items.get(link.b);if(!a||!b)continue;pathPoints([a,b]);g.strokeStyle=handpanLayout.harmonicTable?(link.type==='fifth'?'#b8ddb84b':link.type==='major'?'#d4bc8550':'#90b7dc4b'):handpanLayout.foldedHex?(link.type==='octave'?'#b7ddd35c':'#e2efb34c'):(link.type==='octave'?'#c3d58b40':'#8ca37b30');g.lineWidth=handpanLayout.harmonicTable?.65:handpanLayout.foldedHex?1.05:.7;if(litLinks){g.strokeStyle=handpanLayout.harmonicTable?(link.type==='fifth'?'#cdeccdd8':link.type==='major'?'#ecd29ad8':'#a9cdf0d8'):'#e2f2b8d8';g.lineWidth*=2}g.stroke()}\nif(handpanLayout.foldedHex){const order=handpanProjected.slice().sort((a,b)=>a.cell.step-b.cell.step);g.beginPath();order.forEach((p,i)=>i?g.lineTo(p.x,p.y):g.moveTo(p.x,p.y));g.strokeStyle='rgba(236,244,200,.34)';g.setLineDash([2,4]);g.lineWidth=1;g.stroke();g.setLineDash([])}\nif(handpanLayout.foldedHex){const light=outputLight();for(const ring of [1,2,3]){const cells=handpanProjected.filter(p=>p.cell.ring===ring).sort((a,b)=>Math.atan2(a.y-cy,a.x-cx)-Math.atan2(b.y-cy,b.x-cx));const radius=.218*ring*scale*activeZoom();g.beginPath();for(let i=0;i<6;i++){const angle=-Math.PI/2+i*Math.PI/3;const x=cx+radius*Math.cos(angle),y=cy+radius*Math.sin(angle);i?g.lineTo(x,y):g.moveTo(x,y)}g.closePath();g.strokeStyle='rgba(170,215,174,'+(.19+light*.25)+')';g.lineWidth=.8;g.stroke()}}"],["(cell.ring?'ring '+cell.ring:'central note');$('#xyValue').textContent","(hexFoldedView?(cell.ring?'hexagonal octave '+(octave+cell.octaveStep)+' · note '+(cell.step+1)+' of '+handpanLayout.cells.length:'hexagonal centre · note 1 of '+handpanLayout.cells.length+' · octave '+octave):(cell.ring?'ring '+cell.ring:'central note'));$('#xyValue').textContent"],[" const steps=scaleSteps(),pitches=[0,2,4].map(offset=>{\n  const degree=cell.degree+offset;\n  return cell.midi+steps[degree%steps.length]-steps[cell.degree]+12*Math.floor(degree/steps.length);\n });"," const steps=scaleSteps(),pitches=harmonicTableView?([0,4,7].map(semitones=>cell.midi+semitones).filter(midi=>midi<=127)):[0,2,4].map(offset=>{\n  const degree=cell.degree+offset;\n  return cell.midi+steps[degree%steps.length]-steps[cell.degree]+12*Math.floor(degree/steps.length);\n });"],["g.fillStyle=sphereColour(item.cell.midi,e,.3+e*.35);g.fill();g.strokeStyle=sphereColour(item.cell.midi,e,item.cell.id===handpanSelected?.id?1:.7);","g.fillStyle=handpanLayout.harmonicTable?sphereColour(item.cell.midi,e,(item.cell.inScale?.4:.3)+e*.4):sphereColour(item.cell.midi,e,.3+e*.35);g.fill();g.strokeStyle=handpanLayout.harmonicTable?(item.cell.isTonic?'#e8efb8':item.cell.isDominant?'#c8dcb0':item.cell.isSubdominant?'#a9cddd':item.cell.inScale?'#b4cbaf':'#93ab98'):sphereColour(item.cell.midi,e,item.cell.id===handpanSelected?.id?1:.7);"],["(hexFoldedView?(cell.ring?'hexagonal octave '+(octave+cell.octaveStep)+' · note '+(cell.step+1)+' of '+handpanLayout.cells.length:'hexagonal centre · note 1 of '+handpanLayout.cells.length+' · octave '+octave):(cell.ring?'ring '+cell.ring:'central note'));$('#xyValue').textContent","(harmonicTableView?'harmonic table · '+(cell.q>=0?'+':'')+cell.q+','+cell.r+' · fifths ↑, major thirds ↗, minor thirds ↖':hexFoldedView?(cell.ring?'hexagonal octave '+(octave+cell.octaveStep)+' · note '+(cell.step+1)+' of '+handpanLayout.cells.length:'hexagonal centre · note 1 of '+handpanLayout.cells.length+' · octave '+octave):(cell.ring?'ring '+cell.ring:'central note'));$('#xyValue').textContent"],["function handpanKeyEvent(e){if(!isHandpanView())return false;refreshHandpan();","function handpanKeyEvent(e){if(!isHandpanView())return false;refreshHandpan();if(harmonicTableView&&['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();const current=handpanSelected||handpanLayout.cells[0],dq=e.key==='ArrowRight'?1:e.key==='ArrowLeft'?-1:0,dr=e.key==='ArrowUp'?-1:e.key==='ArrowDown'?1:0;const next=handpanLayout.cells.find(c=>c.q===current.q+dq&&c.r===current.r+dr);if(next){handpanSelected=next;updateHandpanReadout(next)}return true}"],["g.fillStyle='#e9f0d6';g.fillText(midiName(item.cell.midi),item.x,item.y+3)","g.fillStyle='#e9f0d6';g.fillText(midiName(item.cell.midi),item.x,item.y+3);if(handpanLayout.foldedHex&&item.radius>=9){const size=Math.max(6,Math.min(10,item.radius*.3));g.font=size+'px monospace';g.fillStyle='rgba(233,240,214,.62)';g.fillText(String(item.cell.step+1),item.x,item.y-item.radius*.5+size*.35)}"],["drawActivity(ms);g.restore();","drawActivity(ms);\n// Sound Reactive is now visibly different from Traditional Tonnetz.\n// No new audio nodes; this is a display-only FFT-driven overlay.\nif(typeof audioReactive!=='undefined'&&audioReactive&&!isHandpanView()&&spectrum&&spectrum.length){\n const bass=spectrum.slice(2,18).reduce((a,b)=>a+b,0)/(16*255),\n       mids=spectrum.slice(18,90).reduce((a,b)=>a+b,0)/(72*255),\n       highs=spectrum.slice(90,240).reduce((a,b)=>a+b,0)/(150*255);\n for(const [i,power] of [bass,mids,highs].entries()){\n  if(power<.015)continue;\n  const radius=scale*(.17+i*.23+power*.12);\n  g.beginPath();g.arc(cx,cy,radius,0,Math.PI*2);\n  g.strokeStyle=['rgba(203,225,161,','rgba(134,201,200,','rgba(182,156,219,'][i]+Math.min(.55,power*.85)+')';\n  g.lineWidth=1.2+power*3;g.stroke();\n }\n}\ng.restore();"],["<option value=\"exact\">Traditional Tonnetz</option><option value=\"audio\">Sound reactive</option><option value=\"both\">Tonnetz + sound reactive</option>","<option value=\"exact\">Traditional Tonnetz · static lattice</option><option value=\"audio\">Sound Reactive · spectrum</option><option value=\"both\">Tonnetz + Sound Reactive</option>"]];
+ try{
+   const response=await fetch(sourceUrl,{cache:'no-store'});
+   if(!response.ok)throw Error('Original source request returned '+response.status);
+   let source=await response.text();
+   if(source.length<700000)throw Error('Original source is unexpectedly small: '+source.length+' characters');
+   for(let i=0;i<patches.length;i++){
+     const [oldText,newText]=patches[i];
+     const first=source.indexOf(oldText);
+     if(first<0)throw Error('Original source mismatch at patch '+(i+1)+'. No instrument was changed.');
+     if(source.indexOf(oldText,first+oldText.length)>=0)throw Error('Ambiguous patch '+(i+1)+'. No instrument was changed.');
+     source=source.slice(0,first)+newText+source.slice(first+oldText.length);
+   }
+   // Saved sounds add-on: injected as its own script at the end of the instrument.
+   const addon=document.getElementById('savedSoundsAddon').textContent;
+   const tail='</'+'body></html>';
+   if(source.split(tail).length!==2)throw Error('Could not find the end of the instrument page for the saved-sounds add-on.');
+   source=source.replace(tail,'<script>'+addon+'</'+'script>'+tail);
+   // Relative source assets continue resolving from the original site.
+   source=source.replace(/<head([^>]*)>/i,'<head$1><base href="https://stefanopollina.github.io/foldspace/">');
+   document.open();document.write(source);document.close();
+ }catch(error){status.textContent='Could not prepare the prototype: '+error.message+'\n\nThe original live instrument is unchanged.\nAn internet connection and browser access to raw.githubusercontent.com are required.';}
+})();
+</script></body></html>
