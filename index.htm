@@ -744,10 +744,12 @@ async function playHandpanCell(cell){
  handpanSelected=cell;updateHandpanReadout(cell);
  const origin={handpan:cell.id,x:cell.x,y:cell.y};
  if(!isExtendedTouchPattern(touchMode)){note(cell.midi,ctx.currentTime,.85,origin);return}
- const steps=scaleSteps(),pitches=[0,2,4].map(offset=>{
-  const degree=cell.degree+offset;
-  return cell.midi+steps[degree%steps.length]-steps[cell.degree]+12*Math.floor(degree/steps.length);
- });
+ const steps=scaleSteps(),pitches=handpanLayout.dodeca
+  ? [cell.midi,cell.midi+3,cell.midi+7].filter(midi=>midi<=127)
+  : [0,2,4].map(offset=>{
+     const degree=cell.degree+offset;
+     return cell.midi+steps[degree%steps.length]-steps[cell.degree]+12*Math.floor(degree/steps.length);
+    });
  playTouchPattern(pitches,touchMode,ctx.currentTime,origin,.85,pitch=>{
   const pad=handpanLayout.cells.find(candidate=>candidate.midi===pitch);
   return pad?{handpan:pad.id,x:pad.x,y:pad.y}:origin;
